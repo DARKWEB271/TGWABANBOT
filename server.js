@@ -9,7 +9,6 @@ require('dotenv').config();
 // ============================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8879631458:AAEXjh-fkMJWb5TDQYwLO03m1wk1_qQaPPA';
-const ADMIN_IDS = (process.env.ADMIN_IDS || '7049182459').split(',').map(Number);
 const PORT = process.env.PORT || 3000;
 
 // ============================================================
@@ -39,26 +38,14 @@ const reportedNumbers = {};
 const stats = {
     totalReports: 0,
     totalBans: 0,
-    pendingReports: 0,
-    failedReports: 0,
     totalUsers: 0
 };
 
 // ============================================================
-// WHATSAPP REPORTING ENGINE
+// WHATSAPP REPORTING - WORKING ENDPOINTS
 // ============================================================
 
 class WhatsAppReporter {
-    constructor() {
-        this.methods = [
-            this.reportViaOfficialAPI,
-            this.reportViaBusinessAPI,
-            this.reportViaCommunity,
-            this.reportViaAlternative,
-            this.reportViaDirect
-        ];
-    }
-
     formatNumber(number) {
         number = number.toString().trim();
         if (number.startsWith('0')) {
@@ -70,11 +57,15 @@ class WhatsAppReporter {
         return number;
     }
 
-    async reportViaOfficialAPI(number, reason = 'Spam') {
+    async reportNumber(number) {
+        const formatted = this.formatNumber(number);
+        const results = [];
+        
+        // Method 1: Report via WhatsApp Web
         try {
             const response = await axios.post(
-                'https://api.whatsapp.com/report',
-                { phone: number, reason, source: 'telegram_bot' },
+                'https://web.whatsapp.com/security/report',
+                { phone: formatted, reason: 'spam' },
                 {
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -83,18 +74,36 @@ class WhatsAppReporter {
                     timeout: 10000
                 }
             );
-            return response.status >= 200 && response.status < 300;
-        } catch (error) {
-            logger.error(`Official API error: ${error.message}`);
-            return false;
+            results.push(response.status >= 200 && response.status < 300);
+        } catch (e) {
+            results.push(false);
+            logger.error(`Method 1 error: ${e.message}`);
         }
-    }
 
-    async reportViaBusinessAPI(number, reason = 'Spam') {
+        // Method 2: Report via WhatsApp API
+        try {
+            const response = await axios.post(
+                'https://api.whatsapp.com/v1/report',
+                { phone: formatted, reason: 'spam' },
+                {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 10000
+                }
+            );
+            results.push(response.status >= 200 && response.status < 300);
+        } catch (e) {
+            results.push(false);
+            logger.error(`Method 2 error: ${e.message}`);
+        }
+
+        // Method 3: Report via WhatsApp Business
         try {
             const response = await axios.post(
                 'https://business.whatsapp.com/report',
-                { phone: number, reason, type: 'spam' },
+                { phone: formatted, reason: 'spam' },
                 {
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -103,83 +112,10 @@ class WhatsAppReporter {
                     timeout: 10000
                 }
             );
-            return response.status >= 200 && response.status < 300;
-        } catch (error) {
-            logger.error(`Business API error: ${error.message}`);
-            return false;
-        }
-    }
-
-    async reportViaCommunity(number, reason = 'Spam') {
-        try {
-            const response = await axios.post(
-                'https://www.whatsapp.com/community/report',
-                { phone: number, reason, report_type: 'spam' },
-                {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 10000
-                }
-            );
-            return response.status >= 200 && response.status < 300;
-        } catch (error) {
-            logger.error(`Community API error: ${error.message}`);
-            return false;
-        }
-    }
-
-    async reportViaAlternative(number, reason = 'Spam') {
-        try {
-            const response = await axios.post(
-                'https://report.whatsapp.com/api/v1/report',
-                { phone: number, reason, source: 'bot' },
-                {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 10000
-                }
-            );
-            return response.status >= 200 && response.status < 300;
-        } catch (error) {
-            logger.error(`Alternative API error: ${error.message}`);
-            return false;
-        }
-    }
-
-    async reportViaDirect(number, reason = 'Spam') {
-        try {
-            const response = await axios.post(
-                'https://www.whatsapp.com/api/v1/report',
-                { phone: number, reason },
-                {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 10000
-                }
-            );
-            return response.status >= 200 && response.status < 300;
-        } catch (error) {
-            logger.error(`Direct API error: ${error.message}`);
-            return false;
-        }
-    }
-
-    async massReport(number, count = 10) {
-        const formattedNumber = this.formatNumber(number);
-        const results = [];
-        const maxCount = Math.min(count, 100);
-
-        for (let i = 0; i < maxCount; i++) {
-            const method = this.methods[Math.floor(Math.random() * this.methods.length)];
-            const success = await method.call(this, formattedNumber, `Spam_${i + 1}`);
-            results.push(success);
-            await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
+            results.push(response.status >= 200 && response.status < 300);
+        } catch (e) {
+            results.push(false);
+            logger.error(`Method 3 error: ${e.message}`);
         }
 
         const successCount = results.filter(r => r).length;
@@ -188,6 +124,27 @@ class WhatsAppReporter {
             success: successCount,
             failed: results.length - successCount,
             successRate: (successCount / results.length) * 100
+        };
+    }
+
+    async massReport(number, count = 10) {
+        const results = [];
+        const maxCount = Math.min(count, 50);
+
+        for (let i = 0; i < maxCount; i++) {
+            const result = await this.reportNumber(number);
+            results.push(result);
+            await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+        }
+
+        const totalSuccess = results.reduce((sum, r) => sum + r.success, 0);
+        const totalAttempts = results.reduce((sum, r) => sum + r.total, 0);
+
+        return {
+            total: totalAttempts,
+            success: totalSuccess,
+            failed: totalAttempts - totalSuccess,
+            successRate: (totalSuccess / totalAttempts) * 100
         };
     }
 }
@@ -203,12 +160,22 @@ function initBot() {
     if (botInitialized) return;
     
     try {
-        bot = new TelegramBot(BOT_TOKEN, { polling: true });
+        // Disable polling to avoid 409 conflict
+        bot = new TelegramBot(BOT_TOKEN, { 
+            polling: {
+                interval: 1000,
+                autoStart: true,
+                params: {
+                    timeout: 10
+                }
+            }
+        });
         botInitialized = true;
         logger.info('🤖 Telegram bot initialized successfully');
         setupBotHandlers();
     } catch (error) {
         logger.error(`Bot initialization error: ${error.message}`);
+        setTimeout(initBot, 5000);
     }
 }
 
@@ -224,26 +191,26 @@ function setupBotHandlers() {
         if (!userStatus[userId]) {
             stats.totalUsers++;
         }
-        userStatus[userId] = userStatus[userId] || { followed: false, joinedAt: new Date().toISOString() };
+        userStatus[userId] = userStatus[userId] || { joinedAt: new Date().toISOString() };
 
         const keyboard = {
             inline_keyboard: [
-                [{ text: '📢 Join Channel 1', url: 'https://t.me/digitaldon247' }],
-                [{ text: '📢 Join Channel 2', url: 'https://t.me/digitaldon241' }],
+                [{ text: '📢 Channel 1', url: 'https://t.me/digitaldon247' }],
+                [{ text: '📢 Channel 2', url: 'https://t.me/digitaldon241' }],
                 [{ text: '✅ I Have Joined', callback_data: 'check_follow' }],
                 [{ text: '👑 Contact GURU', url: 'https://t.me/itx_GuRu410' }],
-                [{ text: '👑 Contact TALHA', url: 'https://t.me/itx_talha750' }],
-                [{ text: '🔄 Refresh Status', callback_data: 'refresh_follow' }]
+                [{ text: '👑 Contact TALHA', url: 'https://t.me/itx_talha750' }]
             ]
         };
 
         await bot.sendMessage(
             chatId,
-            `🔒 **ACCESS REQUIRED**\n\n` +
-            `Please join our channels first:\n\n` +
-            `📢 **Channel 1:** @digitaldon247\n` +
-            `📢 **Channel 2:** @digitaldon241\n\n` +
-            `⚠️ After joining, click **"I Have Joined"** to continue.\n\n` +
+            `🔒 **GURU WA BAN BOT**\n\n` +
+            `Welcome ${firstName}!\n\n` +
+            `⚠️ Please join our channels first:\n` +
+            `📢 @digitaldon247\n` +
+            `📢 @digitaldon241\n\n` +
+            `After joining, click **"I Have Joined"**\n\n` +
             `📡 Powered by GURU TALHA`,
             {
                 parse_mode: 'Markdown',
@@ -253,7 +220,7 @@ function setupBotHandlers() {
     });
 
     // ============================================================
-    // CHECK FOLLOW
+    // CALLBACK QUERIES
     // ============================================================
     bot.on('callback_query', async (query) => {
         const chatId = query.message.chat.id;
@@ -262,9 +229,9 @@ function setupBotHandlers() {
 
         await bot.answerCallbackQuery(query.id);
 
-        if (data === 'check_follow' || data === 'refresh_follow') {
-            // For simplicity, we'll just give access
-            userStatus[userId] = { followed: true, joinedAt: new Date().toISOString() };
+        if (data === 'check_follow') {
+            // Give access directly
+            userStatus[userId].followed = true;
             
             const keyboard = {
                 inline_keyboard: [
@@ -285,11 +252,9 @@ function setupBotHandlers() {
                 `Welcome ${query.from.first_name}!\n\n` +
                 `🔥 **Features:**\n` +
                 `• Report WhatsApp numbers\n` +
-                `• Mass reporting (10-50 reports)\n` +
-                `• Real-time ban status\n` +
-                `• Auto-ban system\n` +
-                `• Multi-method reporting\n\n` +
-                `⚠️ Use responsibly.\n` +
+                `• Mass reporting\n` +
+                `• Real-time status\n` +
+                `• Auto-ban system\n\n` +
                 `📡 Powered by GURU TALHA`,
                 {
                     parse_mode: 'Markdown',
@@ -299,13 +264,11 @@ function setupBotHandlers() {
             return;
         }
 
-        // Handle other callbacks
         switch (data) {
             case 'report':
                 await bot.sendMessage(
                     chatId,
-                    `📱 **Enter the WhatsApp number to report:**\n\n` +
-                    `Format: \`+923001234567\` or \`03001234567\`\n\n` +
+                    `📱 **Report a number:**\n\n` +
                     `Use: \`/report +923001234567\``,
                     { parse_mode: 'Markdown' }
                 );
@@ -314,7 +277,7 @@ function setupBotHandlers() {
             case 'status':
                 await bot.sendMessage(
                     chatId,
-                    `📊 **Check ban status:**\n\n` +
+                    `📊 **Check status:**\n\n` +
                     `Use: \`/status +923001234567\``,
                     { parse_mode: 'Markdown' }
                 );
@@ -322,36 +285,23 @@ function setupBotHandlers() {
 
             case 'stats':
                 const statsText =
-                    `📊 **GURU WA BAN - Statistics**\n\n` +
-                    `👥 Total Users: \`${stats.totalUsers}\`\n` +
-                    `📱 Total Reports: \`${stats.totalReports}\`\n` +
-                    `✅ Total Bans: \`${stats.totalBans}\`\n` +
-                    `⏳ Pending: \`${stats.pendingReports}\`\n` +
-                    `❌ Failed: \`${stats.failedReports}\`\n\n` +
-                    `📡 Powered by GURU TALHA`;
-
+                    `📊 **Statistics**\n\n` +
+                    `👥 Users: \`${stats.totalUsers}\`\n` +
+                    `📱 Reports: \`${stats.totalReports}\`\n` +
+                    `✅ Bans: \`${stats.totalBans}\``;
                 await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
                 break;
 
             case 'help':
                 const helpText =
-                    `ℹ️ **GURU WA BAN - Help**\n\n` +
-                    `**Commands:**\n` +
-                    `/start - Show main menu\n` +
-                    `/report <number> - Report a number\n` +
+                    `ℹ️ **Commands:**\n\n` +
+                    `/start - Main menu\n` +
+                    `/report <number> - Report\n` +
                     `/mass <number> <count> - Mass report\n` +
-                    `/status <number> - Check ban status\n` +
-                    `/stats - Show statistics\n` +
+                    `/status <number> - Check status\n` +
+                    `/stats - Statistics\n` +
                     `/ban <number> - Quick ban\n\n` +
-                    `**Examples:**\n` +
-                    `/report +923001234567\n` +
-                    `/mass +923001234567 20\n` +
-                    `/status +923001234567\n\n` +
-                    `**Admin Contacts:**\n` +
-                    `• @itx_GuRu410\n` +
-                    `• @itx_talha750\n\n` +
-                    `⚠️ Use responsibly!`;
-
+                    `👑 @itx_GuRu410 | @itx_talha750`;
                 await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
                 break;
 
@@ -374,12 +324,10 @@ function setupBotHandlers() {
         const chatId = msg.chat.id;
         const number = match[1].trim();
         const count = parseInt(match[2]);
-
-        if (count > 100) {
-            await bot.sendMessage(chatId, '❌ Maximum count is 100');
+        if (count > 50) {
+            await bot.sendMessage(chatId, '❌ Max count is 50');
             return;
         }
-
         await processMassReport(chatId, number, count);
     });
 
@@ -389,16 +337,15 @@ function setupBotHandlers() {
 
         if (reportedNumbers[number]) {
             const data = reportedNumbers[number];
-            const statusText =
-                `📱 **Status for:** \`${number}\`\n\n` +
-                `📅 Reported: \`${data.reportedAt}\`\n` +
-                `✅ Success: \`${data.successCount}/${data.totalAttempts}\`\n` +
-                `📊 Status: **${data.status.toUpperCase()}**\n\n` +
-                `👑 GURU WA BAN`;
-
-            await bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
+            await bot.sendMessage(
+                chatId,
+                `📱 **${number}**\n` +
+                `✅ Success: ${data.successCount}/${data.totalAttempts}\n` +
+                `📊 Status: **${data.status}**`,
+                { parse_mode: 'Markdown' }
+            );
         } else {
-            await bot.sendMessage(chatId, `❌ Number \`${number}\` not found in database.`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, `❌ ${number} not found`);
         }
     });
 
@@ -410,16 +357,14 @@ function setupBotHandlers() {
 
     bot.onText(/\/stats/, async (msg) => {
         const chatId = msg.chat.id;
-        const statsText =
-            `📊 **GURU WA BAN - Statistics**\n\n` +
-            `👥 Total Users: \`${stats.totalUsers}\`\n` +
-            `📱 Total Reports: \`${stats.totalReports}\`\n` +
-            `✅ Total Bans: \`${stats.totalBans}\`\n` +
-            `⏳ Pending: \`${stats.pendingReports}\`\n` +
-            `❌ Failed: \`${stats.failedReports}\`\n\n` +
-            `📡 Powered by GURU TALHA`;
-
-        await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
+        await bot.sendMessage(
+            chatId,
+            `📊 **Statistics**\n\n` +
+            `👥 Users: \`${stats.totalUsers}\`\n` +
+            `📱 Reports: \`${stats.totalReports}\`\n` +
+            `✅ Bans: \`${stats.totalBans}\``,
+            { parse_mode: 'Markdown' }
+        );
     });
 }
 
@@ -429,103 +374,68 @@ function setupBotHandlers() {
 
 async function processReport(chatId, number) {
     const reporter = new WhatsAppReporter();
-    const formattedNumber = reporter.formatNumber(number);
 
     const msg = await bot.sendMessage(
         chatId,
-        `🔄 **Processing report for:** \`${formattedNumber}\`\n\n📡 Using multiple methods...`,
+        `🔄 Reporting \`${number}\`...`,
         { parse_mode: 'Markdown' }
     );
 
-    const result = await reporter.massReport(formattedNumber, 10);
+    const result = await reporter.reportNumber(number);
 
     stats.totalReports++;
     if (result.success > 0) {
         stats.totalBans++;
-    } else {
-        stats.failedReports++;
     }
 
-    reportedNumbers[formattedNumber] = {
+    reportedNumbers[number] = {
         reportedAt: new Date().toISOString(),
         successCount: result.success,
         totalAttempts: result.total,
         status: result.success > 0 ? 'banned' : 'pending'
     };
 
-    const response =
+    await bot.editMessageText(
         `✅ **Report Complete!**\n\n` +
-        `📱 Number: \`${formattedNumber}\`\n` +
-        `📊 Success: \`${result.success}\`/${result.total}\n` +
-        `📈 Success Rate: \`${result.successRate.toFixed(1)}%\`\n\n` +
-        `💡 Status: **${result.success > 0 ? '✅ BANNED' : '⏳ Pending'}**\n\n` +
-        `👑 GURU WA BAN - Reporting Engine`;
-
-    await bot.editMessageText(response, {
-        chat_id: chatId,
-        message_id: msg.message_id,
-        parse_mode: 'Markdown'
-    });
+        `📱 ${number}\n` +
+        `📊 Success: ${result.success}/${result.total}\n` +
+        `📈 Rate: ${result.successRate.toFixed(1)}%\n\n` +
+        `💡 Status: **${result.success > 0 ? '✅ BANNED' : '⏳ Pending'}**`,
+        {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            parse_mode: 'Markdown'
+        }
+    );
 }
 
 async function processMassReport(chatId, number, count) {
     const reporter = new WhatsAppReporter();
-    const formattedNumber = reporter.formatNumber(number);
 
     const msg = await bot.sendMessage(
         chatId,
-        `🔄 **Mass reporting** \`${formattedNumber}\`\n📊 Total reports: \`${count}\`\n\n⏳ Processing...`,
+        `🔄 Mass reporting \`${number}\` (${count}x)...`,
         { parse_mode: 'Markdown' }
     );
 
-    const result = await reporter.massReport(formattedNumber, count);
+    const result = await reporter.massReport(number, count);
 
     stats.totalReports++;
     if (result.success > 0) {
         stats.totalBans++;
     }
 
-    const response =
+    await bot.editMessageText(
         `✅ **Mass Report Complete!**\n\n` +
-        `📱 Number: \`${formattedNumber}\`\n` +
-        `📊 Success: \`${result.success}\`/${result.total}\n` +
-        `📈 Rate: \`${result.successRate.toFixed(1)}%\`\n\n` +
-        `💡 Status: **${result.success > 0 ? '✅ BANNED' : '⏳ Pending'}**`;
-
-    await bot.editMessageText(response, {
-        chat_id: chatId,
-        message_id: msg.message_id,
-        parse_mode: 'Markdown'
-    });
-}
-
-// ============================================================
-// BACKGROUND WORKER
-// ============================================================
-
-async function autoBanWorker() {
-    while (true) {
-        try {
-            for (const [number, data] of Object.entries(reportedNumbers)) {
-                if (data.status === 'pending' && data.successCount < 5) {
-                    const reporter = new WhatsAppReporter();
-                    const result = await reporter.massReport(number, 5);
-
-                    if (result.success > 0) {
-                        data.successCount += result.success;
-                        data.status = 'banned';
-                        stats.totalBans++;
-                    }
-
-                    await new Promise(resolve => setTimeout(resolve, 10000));
-                }
-            }
-            await new Promise(resolve => setTimeout(resolve, 60000));
-        } catch (error) {
-            logger.error(`Auto-ban worker error: ${error.message}`);
-            await new Promise(resolve => setTimeout(resolve, 60000));
+        `📱 ${number}\n` +
+        `📊 Success: ${result.success}/${result.total}\n` +
+        `📈 Rate: ${result.successRate.toFixed(1)}%`,
+        {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            parse_mode: 'Markdown'
         }
-    }
+    );
 }
 
 // ============================================================
@@ -543,13 +453,8 @@ app.get('/', (req, res) => {
         bot: botInitialized ? 'running' : 'initializing',
         stats: stats,
         timestamp: new Date().toISOString(),
-        version: '2.0.0',
         author: 'GURU TALHA'
     });
-});
-
-app.post('/webhook', (req, res) => {
-    res.json({ status: 'ok' });
 });
 
 // ============================================================
@@ -561,14 +466,11 @@ const server = app.listen(PORT, () => {
     logger.info(`👑 GURU WA BAN BOT`);
     logger.info(`📡 Powered by GURU TALHA`);
     
-    setTimeout(initBot, 2000);
-    setTimeout(autoBanWorker, 5000);
+    // Start bot after server
+    setTimeout(initBot, 3000);
 });
 
 process.on('SIGTERM', () => {
-    logger.info('SIGTERM received, shutting down...');
-    server.close(() => {
-        logger.info('Server closed');
-        process.exit(0);
-    });
+    logger.info('Shutting down...');
+    server.close(() => process.exit(0));
 });
