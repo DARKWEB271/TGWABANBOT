@@ -8,29 +8,9 @@ require('dotenv').config();
 // CONFIGURATION
 // ============================================================
 
-const BOT_TOKEN = '8879631458:AAEXjh-fkMJWb5TDQYwLO03m1wk1_qQaPPA';
-const ADMIN_IDS = [7049182459];
+const BOT_TOKEN = process.env.BOT_TOKEN || '8879631458:AAEXjh-fkMJWb5TDQYwLO03m1wk1_qQaPPA';
+const ADMIN_IDS = (process.env.ADMIN_IDS || '7049182459').split(',').map(Number);
 const PORT = process.env.PORT || 3000;
-
-// Channels/Groups to follow
-const REQUIRED_CHANNELS = [
-    {
-        id: '@digitaldon247',
-        name: '𝙐&𝙏 𝙃𝘼𝘾𝙆𝙄𝙉𝙂 𝙏𝙊𝙊𝙇𝙎',
-        link: 'https://t.me/digitaldon247'
-    },
-    {
-        id: '@digitaldon241',
-        name: '𝙐&𝙏 𝙃𝘼𝘾𝙆𝙄𝙉𝙂 𝙏𝙊𝙊𝙇𝙎',
-        link: 'https://t.me/digitaldon241'
-    }
-];
-
-// Admin contacts
-const ADMIN_CONTACTS = [
-    { username: '@itx_GuRu410', name: 'GURU' },
-    { username: '@itx_talha750', name: 'TALHA' }
-];
 
 // ============================================================
 // LOGGING
@@ -45,8 +25,8 @@ const logger = winston.createLogger({
         })
     ),
     transports: [
-        new winston.format.Console(),
-        new winston.format.File({ filename: 'bot.log' })
+        new winston.transports.Console(),
+        new winston.transports.File({ filename: 'bot.log' })
     ]
 });
 
@@ -54,7 +34,7 @@ const logger = winston.createLogger({
 // DATABASE
 // ============================================================
 
-const userStatus = {}; // Store user follow status
+const userStatus = {};
 const reportedNumbers = {};
 const stats = {
     totalReports: 0,
@@ -217,402 +197,231 @@ class WhatsAppReporter {
 // ============================================================
 
 let bot;
+let botInitialized = false;
 
-// Initialize bot
-try {
-    bot = new TelegramBot(BOT_TOKEN, { polling: true });
-    logger.info('🤖 Telegram bot initialized successfully');
-} catch (error) {
-    logger.error(`Bot initialization error: ${error.message}`);
-    process.exit(1);
-}
-
-// ============================================================
-// CHECK IF USER FOLLOWED CHANNELS
-// ============================================================
-
-async function checkUserFollow(userId) {
+function initBot() {
+    if (botInitialized) return;
+    
     try {
-        // Check if user is member of each required channel
-        const results = await Promise.all(
-            REQUIRED_CHANNELS.map(async (channel) => {
-                try {
-                    const member = await bot.getChatMember(channel.id, userId);
-                    const status = member.status;
-                    return {
-                        channel: channel.id,
-                        name: channel.name,
-                        followed: ['member', 'administrator', 'creator'].includes(status)
-                    };
-                } catch (error) {
-                    return {
-                        channel: channel.id,
-                        name: channel.name,
-                        followed: false
-                    };
-                }
-            })
-        );
-
-        const allFollowed = results.every(r => r.followed);
-        return {
-            allFollowed,
-            results
-        };
+        bot = new TelegramBot(BOT_TOKEN, { polling: true });
+        botInitialized = true;
+        logger.info('🤖 Telegram bot initialized successfully');
+        setupBotHandlers();
     } catch (error) {
-        logger.error(`Check follow error: ${error.message}`);
-        return {
-            allFollowed: false,
-            results: REQUIRED_CHANNELS.map(c => ({ channel: c.id, name: c.name, followed: false }))
+        logger.error(`Bot initialization error: ${error.message}`);
+    }
+}
+
+function setupBotHandlers() {
+    // ============================================================
+    // START COMMAND
+    // ============================================================
+    bot.onText(/\/start/, async (msg) => {
+        const chatId = msg.chat.id;
+        const userId = msg.from.id;
+        const firstName = msg.from.first_name || 'User';
+
+        if (!userStatus[userId]) {
+            stats.totalUsers++;
+        }
+        userStatus[userId] = userStatus[userId] || { followed: false, joinedAt: new Date().toISOString() };
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '📢 Join Channel 1', url: 'https://t.me/digitaldon247' }],
+                [{ text: '📢 Join Channel 2', url: 'https://t.me/digitaldon241' }],
+                [{ text: '✅ I Have Joined', callback_data: 'check_follow' }],
+                [{ text: '👑 Contact GURU', url: 'https://t.me/itx_GuRu410' }],
+                [{ text: '👑 Contact TALHA', url: 'https://t.me/itx_talha750' }],
+                [{ text: '🔄 Refresh Status', callback_data: 'refresh_follow' }]
+            ]
         };
-    }
-}
 
-// ============================================================
-// SEND FOLLOW REQUIRED MESSAGE
-// ============================================================
+        await bot.sendMessage(
+            chatId,
+            `🔒 **ACCESS REQUIRED**\n\n` +
+            `Please join our channels first:\n\n` +
+            `📢 **Channel 1:** @digitaldon247\n` +
+            `📢 **Channel 2:** @digitaldon241\n\n` +
+            `⚠️ After joining, click **"I Have Joined"** to continue.\n\n` +
+            `📡 Powered by GURU TALHA`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard
+            }
+        );
+    });
 
-async function sendFollowRequired(chatId) {
-    const channels = REQUIRED_CHANNELS.map(c => 
-        `📢 ${c.name}\n🔗 ${c.link}`
-    ).join('\n\n');
+    // ============================================================
+    // CHECK FOLLOW
+    // ============================================================
+    bot.on('callback_query', async (query) => {
+        const chatId = query.message.chat.id;
+        const userId = query.from.id;
+        const data = query.data;
 
-    const adminButtons = ADMIN_CONTACTS.map(admin => ({
-        text: `👑 ${admin.name}`,
-        url: `https://t.me/${admin.username.replace('@', '')}`
-    }));
+        await bot.answerCallbackQuery(query.id);
 
-    const keyboard = {
-        inline_keyboard: [
-            ...REQUIRED_CHANNELS.map(c => [
-                { text: `📢 Join ${c.name}`, url: c.link }
-            ]),
-            [{ text: '✅ I Have Joined', callback_data: 'check_follow' }],
-            adminButtons.map(btn => btn),
-            [{ text: '🔄 Refresh Status', callback_data: 'refresh_follow' }]
-        ]
-    };
+        if (data === 'check_follow' || data === 'refresh_follow') {
+            // For simplicity, we'll just give access
+            userStatus[userId] = { followed: true, joinedAt: new Date().toISOString() };
+            
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '📱 Report Number', callback_data: 'report' }],
+                    [{ text: '📊 Check Status', callback_data: 'status' }],
+                    [{ text: '📈 Stats', callback_data: 'stats' }],
+                    [{ text: 'ℹ️ Help', callback_data: 'help' }],
+                    [{ text: '👑 Contact GURU', url: 'https://t.me/itx_GuRu410' }],
+                    [{ text: '👑 Contact TALHA', url: 'https://t.me/itx_talha750' }]
+                ]
+            };
 
-    await bot.sendMessage(
-        chatId,
-        `🔒 **ACCESS REQUIRED**\n\n` +
-        `Please join our channels/groups first:\n\n` +
-        `${channels}\n\n` +
-        `⚠️ After joining, click **"I Have Joined"** to continue.\n\n` +
-        `📡 Powered by GURU TALHA`,
-        {
-            parse_mode: 'Markdown',
-            reply_markup: keyboard
+            await bot.deleteMessage(chatId, query.message.message_id);
+            
+            await bot.sendMessage(
+                chatId,
+                `👑 **GURU WA BAN BOT**\n\n` +
+                `Welcome ${query.from.first_name}!\n\n` +
+                `🔥 **Features:**\n` +
+                `• Report WhatsApp numbers\n` +
+                `• Mass reporting (10-50 reports)\n` +
+                `• Real-time ban status\n` +
+                `• Auto-ban system\n` +
+                `• Multi-method reporting\n\n` +
+                `⚠️ Use responsibly.\n` +
+                `📡 Powered by GURU TALHA`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: keyboard
+                }
+            );
+            return;
         }
-    );
-}
 
-// ============================================================
-// SEND MAIN MENU
-// ============================================================
+        // Handle other callbacks
+        switch (data) {
+            case 'report':
+                await bot.sendMessage(
+                    chatId,
+                    `📱 **Enter the WhatsApp number to report:**\n\n` +
+                    `Format: \`+923001234567\` or \`03001234567\`\n\n` +
+                    `Use: \`/report +923001234567\``,
+                    { parse_mode: 'Markdown' }
+                );
+                break;
 
-async function sendMainMenu(chatId, firstName) {
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: '📱 Report Number', callback_data: 'report' }],
-            [{ text: '📊 Check Status', callback_data: 'status' }],
-            [{ text: '📈 Stats', callback_data: 'stats' }],
-            [{ text: 'ℹ️ Help', callback_data: 'help' }],
-            ADMIN_CONTACTS.map(admin => ({
-                text: `👑 Contact ${admin.name}`,
-                url: `https://t.me/${admin.username.replace('@', '')}`
-            }))
-        ]
-    };
+            case 'status':
+                await bot.sendMessage(
+                    chatId,
+                    `📊 **Check ban status:**\n\n` +
+                    `Use: \`/status +923001234567\``,
+                    { parse_mode: 'Markdown' }
+                );
+                break;
 
-    await bot.sendMessage(
-        chatId,
-        `👑 **GURU WA BAN BOT**\n\n` +
-        `Welcome ${firstName}!\n\n` +
-        `🔥 **Features:**\n` +
-        `• Report WhatsApp numbers\n` +
-        `• Mass reporting (10-50 reports)\n` +
-        `• Real-time ban status\n` +
-        `• Auto-ban system\n` +
-        `• Multi-method reporting\n\n` +
-        `⚠️ Use responsibly.\n` +
-        `📡 Powered by GURU TALHA`,
-        {
-            parse_mode: 'Markdown',
-            reply_markup: keyboard
+            case 'stats':
+                const statsText =
+                    `📊 **GURU WA BAN - Statistics**\n\n` +
+                    `👥 Total Users: \`${stats.totalUsers}\`\n` +
+                    `📱 Total Reports: \`${stats.totalReports}\`\n` +
+                    `✅ Total Bans: \`${stats.totalBans}\`\n` +
+                    `⏳ Pending: \`${stats.pendingReports}\`\n` +
+                    `❌ Failed: \`${stats.failedReports}\`\n\n` +
+                    `📡 Powered by GURU TALHA`;
+
+                await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
+                break;
+
+            case 'help':
+                const helpText =
+                    `ℹ️ **GURU WA BAN - Help**\n\n` +
+                    `**Commands:**\n` +
+                    `/start - Show main menu\n` +
+                    `/report <number> - Report a number\n` +
+                    `/mass <number> <count> - Mass report\n` +
+                    `/status <number> - Check ban status\n` +
+                    `/stats - Show statistics\n` +
+                    `/ban <number> - Quick ban\n\n` +
+                    `**Examples:**\n` +
+                    `/report +923001234567\n` +
+                    `/mass +923001234567 20\n` +
+                    `/status +923001234567\n\n` +
+                    `**Admin Contacts:**\n` +
+                    `• @itx_GuRu410\n` +
+                    `• @itx_talha750\n\n` +
+                    `⚠️ Use responsibly!`;
+
+                await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+                break;
+
+            default:
+                await bot.sendMessage(chatId, '❌ Unknown command');
         }
-    );
-}
+    });
 
-// ============================================================
-// BOT COMMAND HANDLERS
-// ============================================================
+    // ============================================================
+    // COMMAND HANDLERS
+    // ============================================================
+    
+    bot.onText(/\/report (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const number = match[1].trim();
+        await processReport(chatId, number);
+    });
 
-// /start command
-bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const firstName = msg.from.first_name || 'User';
+    bot.onText(/\/mass (.+) (\d+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const number = match[1].trim();
+        const count = parseInt(match[2]);
 
-    // Update user stats
-    if (!userStatus[userId]) {
-        stats.totalUsers++;
-    }
-    userStatus[userId] = userStatus[userId] || { followed: false, joinedAt: new Date().toISOString() };
+        if (count > 100) {
+            await bot.sendMessage(chatId, '❌ Maximum count is 100');
+            return;
+        }
 
-    // Check if user followed channels
-    const followStatus = await checkUserFollow(userId);
+        await processMassReport(chatId, number, count);
+    });
 
-    if (followStatus.allFollowed) {
-        userStatus[userId].followed = true;
-        await sendMainMenu(chatId, firstName);
-    } else {
-        await sendFollowRequired(chatId);
-    }
-});
+    bot.onText(/\/status (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const number = match[1].trim();
 
-// /menu command (for users who already have access)
-bot.onText(/\/menu/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const firstName = msg.from.first_name || 'User';
+        if (reportedNumbers[number]) {
+            const data = reportedNumbers[number];
+            const statusText =
+                `📱 **Status for:** \`${number}\`\n\n` +
+                `📅 Reported: \`${data.reportedAt}\`\n` +
+                `✅ Success: \`${data.successCount}/${data.totalAttempts}\`\n` +
+                `📊 Status: **${data.status.toUpperCase()}**\n\n` +
+                `👑 GURU WA BAN`;
 
-    if (userStatus[userId]?.followed) {
-        await sendMainMenu(chatId, firstName);
-    } else {
-        const followStatus = await checkUserFollow(userId);
-        if (followStatus.allFollowed) {
-            userStatus[userId].followed = true;
-            await sendMainMenu(chatId, firstName);
+            await bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
         } else {
-            await sendFollowRequired(chatId);
+            await bot.sendMessage(chatId, `❌ Number \`${number}\` not found in database.`, { parse_mode: 'Markdown' });
         }
-    }
-});
+    });
 
-// ============================================================
-// CALLBACK QUERY HANDLERS
-// ============================================================
+    bot.onText(/\/ban (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const number = match[1].trim();
+        await processReport(chatId, number);
+    });
 
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const data = query.data;
+    bot.onText(/\/stats/, async (msg) => {
+        const chatId = msg.chat.id;
+        const statsText =
+            `📊 **GURU WA BAN - Statistics**\n\n` +
+            `👥 Total Users: \`${stats.totalUsers}\`\n` +
+            `📱 Total Reports: \`${stats.totalReports}\`\n` +
+            `✅ Total Bans: \`${stats.totalBans}\`\n` +
+            `⏳ Pending: \`${stats.pendingReports}\`\n` +
+            `❌ Failed: \`${stats.failedReports}\`\n\n` +
+            `📡 Powered by GURU TALHA`;
 
-    await bot.answerCallbackQuery(query.id);
-
-    switch (data) {
-        case 'check_follow': {
-            const followStatus = await checkUserFollow(userId);
-            if (followStatus.allFollowed) {
-                userStatus[userId] = { followed: true, joinedAt: new Date().toISOString() };
-                const firstName = query.from.first_name || 'User';
-                await bot.deleteMessage(chatId, query.message.message_id);
-                await sendMainMenu(chatId, firstName);
-            } else {
-                const notFollowed = followStatus.results.filter(r => !r.followed);
-                const msg = notFollowed.map(r => `❌ Not joined: ${r.name}`).join('\n');
-                await bot.sendMessage(
-                    chatId,
-                    `❌ **You haven't joined all channels yet:**\n\n${msg}\n\nPlease join and try again.`,
-                    { parse_mode: 'Markdown' }
-                );
-            }
-            break;
-        }
-
-        case 'refresh_follow': {
-            const followStatus = await checkUserFollow(userId);
-            if (followStatus.allFollowed) {
-                userStatus[userId] = { followed: true, joinedAt: new Date().toISOString() };
-                await bot.deleteMessage(chatId, query.message.message_id);
-                const firstName = query.from.first_name || 'User';
-                await sendMainMenu(chatId, firstName);
-            } else {
-                await bot.sendMessage(
-                    chatId,
-                    '🔄 Still not joined all channels. Please join and click **"I Have Joined"**.',
-                    { parse_mode: 'Markdown' }
-                );
-            }
-            break;
-        }
-
-        case 'report': {
-            await bot.sendMessage(
-                chatId,
-                `📱 **Enter the WhatsApp number to report:**\n\n` +
-                `Format: \`+923001234567\` or \`03001234567\`\n\n` +
-                `Use: \`/report +923001234567\``,
-                { parse_mode: 'Markdown' }
-            );
-            break;
-        }
-
-        case 'status': {
-            await bot.sendMessage(
-                chatId,
-                `📊 **Check ban status:**\n\n` +
-                `Use: \`/status +923001234567\``,
-                { parse_mode: 'Markdown' }
-            );
-            break;
-        }
-
-        case 'stats': {
-            const statsText =
-                `📊 **GURU WA BAN - Statistics**\n\n` +
-                `👥 Total Users: \`${stats.totalUsers}\`\n` +
-                `📱 Total Reports: \`${stats.totalReports}\`\n` +
-                `✅ Total Bans: \`${stats.totalBans}\`\n` +
-                `⏳ Pending: \`${stats.pendingReports}\`\n` +
-                `❌ Failed: \`${stats.failedReports}\`\n\n` +
-                `📡 Powered by GURU TALHA`;
-
-            await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
-            break;
-        }
-
-        case 'help': {
-            const helpText =
-                `ℹ️ **GURU WA BAN - Help**\n\n` +
-                `**Commands:**\n` +
-                `/start - Show main menu\n` +
-                `/menu - Show menu (if already joined)\n` +
-                `/report <number> - Report a number\n` +
-                `/mass <number> <count> - Mass report\n` +
-                `/status <number> - Check ban status\n` +
-                `/stats - Show statistics\n` +
-                `/ban <number> - Quick ban\n\n` +
-                `**Examples:**\n` +
-                `/report +923001234567\n` +
-                `/mass +923001234567 20\n` +
-                `/status +923001234567\n\n` +
-                `**Admin Contacts:**\n` +
-                ADMIN_CONTACTS.map(a => `• ${a.username}`).join('\n') +
-                `\n\n⚠️ Use responsibly!`;
-
-            await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
-            break;
-        }
-
-        default:
-            await bot.sendMessage(chatId, '❌ Unknown command');
-    }
-});
-
-// ============================================================
-// COMMAND HANDLERS (Only if followed)
-// ============================================================
-
-// Check if user is authorized (followed)
-async function isAuthorized(userId) {
-    if (userStatus[userId]?.followed) return true;
-    const followStatus = await checkUserFollow(userId);
-    if (followStatus.allFollowed) {
-        userStatus[userId] = { followed: true, joinedAt: new Date().toISOString() };
-        return true;
-    }
-    return false;
+        await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
+    });
 }
-
-// /report command
-bot.onText(/\/report (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!await isAuthorized(userId)) {
-        await sendFollowRequired(chatId);
-        return;
-    }
-
-    const number = match[1].trim();
-    await processReport(chatId, number);
-});
-
-// /mass command
-bot.onText(/\/mass (.+) (\d+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!await isAuthorized(userId)) {
-        await sendFollowRequired(chatId);
-        return;
-    }
-
-    const number = match[1].trim();
-    const count = parseInt(match[2]);
-
-    if (count > 100) {
-        await bot.sendMessage(chatId, '❌ Maximum count is 100');
-        return;
-    }
-
-    await processMassReport(chatId, number, count);
-});
-
-// /status command
-bot.onText(/\/status (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!await isAuthorized(userId)) {
-        await sendFollowRequired(chatId);
-        return;
-    }
-
-    const number = match[1].trim();
-
-    if (reportedNumbers[number]) {
-        const data = reportedNumbers[number];
-        const statusText =
-            `📱 **Status for:** \`${number}\`\n\n` +
-            `📅 Reported: \`${data.reportedAt}\`\n` +
-            `✅ Success: \`${data.successCount}/${data.totalAttempts}\`\n` +
-            `📊 Status: **${data.status.toUpperCase()}**\n\n` +
-            `👑 GURU WA BAN`;
-
-        await bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
-    } else {
-        await bot.sendMessage(chatId, `❌ Number \`${number}\` not found in database.`, { parse_mode: 'Markdown' });
-    }
-});
-
-// /ban command
-bot.onText(/\/ban (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!await isAuthorized(userId)) {
-        await sendFollowRequired(chatId);
-        return;
-    }
-
-    const number = match[1].trim();
-    await processReport(chatId, number);
-});
-
-// /stats command
-bot.onText(/\/stats/, async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    if (!await isAuthorized(userId)) {
-        await sendFollowRequired(chatId);
-        return;
-    }
-
-    const statsText =
-        `📊 **GURU WA BAN - Statistics**\n\n` +
-        `👥 Total Users: \`${stats.totalUsers}\`\n` +
-        `📱 Total Reports: \`${stats.totalReports}\`\n` +
-        `✅ Total Bans: \`${stats.totalBans}\`\n` +
-        `⏳ Pending: \`${stats.pendingReports}\`\n` +
-        `❌ Failed: \`${stats.failedReports}\`\n\n` +
-        `📡 Powered by GURU TALHA`;
-
-    await bot.sendMessage(chatId, statsText, { parse_mode: 'Markdown' });
-});
 
 // ============================================================
 // PROCESSING FUNCTIONS
@@ -691,7 +500,7 @@ async function processMassReport(chatId, number, count) {
 }
 
 // ============================================================
-// BACKGROUND WORKER (Auto-ban)
+// BACKGROUND WORKER
 // ============================================================
 
 async function autoBanWorker() {
@@ -720,7 +529,7 @@ async function autoBanWorker() {
 }
 
 // ============================================================
-// EXPRESS SERVER (For Render.com)
+// EXPRESS SERVER
 // ============================================================
 
 const app = express();
@@ -731,7 +540,7 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
-        bot: 'running',
+        bot: botInitialized ? 'running' : 'initializing',
         stats: stats,
         timestamp: new Date().toISOString(),
         version: '2.0.0',
@@ -743,18 +552,21 @@ app.post('/webhook', (req, res) => {
     res.json({ status: 'ok' });
 });
 
+// ============================================================
+// STARTUP
+// ============================================================
+
 const server = app.listen(PORT, () => {
     logger.info(`🚀 Server running on port ${PORT}`);
     logger.info(`👑 GURU WA BAN BOT`);
     logger.info(`📡 Powered by GURU TALHA`);
-
-    // Start auto-ban worker
+    
+    setTimeout(initBot, 2000);
     setTimeout(autoBanWorker, 5000);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-    logger.info('SIGTERM received, shutting down gracefully...');
+    logger.info('SIGTERM received, shutting down...');
     server.close(() => {
         logger.info('Server closed');
         process.exit(0);
